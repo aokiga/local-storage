@@ -20,6 +20,7 @@
 #include <sys/epoll.h>
 #include <sys/socket.h>
 #include <sys/types.h>
+#include <thread>
 
 static_assert(EAGAIN == EWOULDBLOCK);
 
@@ -201,6 +202,9 @@ int main(int argc, const char** argv)
     std::string storage_file = "storage.txt";
     PersistentStorage storage = PersistentStorage(storage_file);
 
+    std::unordered_map<int, std::queue<std::string>> states_put;
+
+    std::mutex put_mutex, state_output_mutex;
     auto handle_get = [&] (const std::string& request) {
         NProto::TGetRequest get_request;
         if (!get_request.ParseFromArray(request.data(), request.size())) {
@@ -225,7 +229,7 @@ int main(int argc, const char** argv)
         return response.str();
     };
 
-    auto handle_put = [&] (const std::string& request) {
+    auto handle_put = [&] (int fd, const std::string& request) {
         NProto::TPutRequest put_request;
         if (!put_request.ParseFromArray(request.data(), request.size())) {
             // TODO proper handling
@@ -244,12 +248,16 @@ int main(int argc, const char** argv)
         serialize_header(PUT_RESPONSE, put_response.ByteSizeLong(), response);
         put_response.SerializeToOstream(&response);
 
+
+        std::lock_guard<std::mutex> guard(put_mutex);
+        states_put[fd].push(response.str());
+
         return response.str();
     };
 
-    Handler handler = [&] (char request_type, const std::string& request) {
+    Handler handler = [&] (int fd, char request_type, const std::string& request) {
         switch (request_type) {
-            case PUT_REQUEST: return handle_put(request);
+            case PUT_REQUEST: return handle_put(fd, request);
             case GET_REQUEST: return handle_get(request);
         }
 
@@ -272,7 +280,26 @@ int main(int argc, const char** argv)
 
         close(fd);
         states.erase(fd);
+        states_put.erase(fd);
     };
+
+    auto sync = [&]() {
+        storage.sync();
+        for (auto &item: states_put) {
+            auto &q = item.second;
+            auto state = states.at(item.first);
+            std::lock_guard<std::mutex> guard_output(state_output_mutex);
+            std::lock_guard<std::mutex> guard_put(put_mutex);
+            while (!q.empty()) {
+                state->output_queue.push_back(q.front());
+                q.pop();
+            }
+            process_output(*state);
+        }
+        sleep(1);
+    };
+
+    std::thread put_requests_thread(sync);
 
     while (true) {
         const auto n = epoll_wait(epollfd, events.data(), ::max_events, -1);
@@ -311,6 +338,7 @@ int main(int argc, const char** argv)
             bool closed = false;
             if (events[i].events & EPOLLIN) {
                 auto state = states.at(fd);
+                std::lock_guard<std::mutex> guard(state_output_mutex);
                 if (!process_input(*state, handler)) {
                     finalize(fd);
                     closed = true;
@@ -319,6 +347,7 @@ int main(int argc, const char** argv)
 
             if (events[i].events & EPOLLOUT && !closed) {
                 auto state = states.at(fd);
+                std::lock_guard<std::mutex> guard(state_output_mutex);
                 if (!process_output(*state)) {
                     finalize(fd);
                 }

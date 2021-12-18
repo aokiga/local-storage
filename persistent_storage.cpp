@@ -9,6 +9,7 @@ PersistentStorage::PersistentStorage(const std::string &filename) {
 }
 
 Value* PersistentStorage::find(const Key &key) {
+    std::lock_guard<std::mutex> guard(mutex);
     auto it = storage.find(key);
     if (it != storage.end()) {
         return &(it->second);
@@ -18,12 +19,13 @@ Value* PersistentStorage::find(const Key &key) {
 
 void PersistentStorage::set(const Key &key, const Value &value) {
     write_to_disk(key, value);
-    storage[key] = value;
 }
 
 void PersistentStorage::write_to_disk(const Key &key, const Value &value) {
     fprintf(file, "%s %s ", key.c_str(), std::to_string(value).c_str());
-    fsync(fileDesc);
+    fflush(file);
+    std::lock_guard<std::mutex> guard(mutex);
+    q.push(std::make_pair(key, value));
 }
 
 void PersistentStorage::read_from_disk(const std::string &path_to_file) {
@@ -38,4 +40,15 @@ void PersistentStorage::read_from_disk(const std::string &path_to_file) {
 
 PersistentStorage::~PersistentStorage() {
     fclose(file);
+}
+
+void PersistentStorage::sync() {
+    fsync(fileDesc);
+    std::lock_guard<std::mutex> g(mutex);
+    while (!q.empty()) {
+        Key key = q.front().first;
+        Value value = q.front().second;
+        storage[key] = value;
+        q.pop();
+    }
 }

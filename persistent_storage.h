@@ -3,6 +3,8 @@
 
 #include <unordered_map>
 #include <string>
+#include <queue>
+#include <mutex>
 
 typedef std::string Key;
 typedef u_int64_t Value;
@@ -13,12 +15,18 @@ public:
 
     Value* find(const Key &key);
     void set(const Key &key, const Value &value);
+
+    void sync();
+
     ~PersistentStorage();
 private:
     FILE *file = nullptr;
     int fileDesc;
 
     std::unordered_map<Key, Value> storage;
+
+    std::queue<std::pair<Key, Value>> q;
+    std::mutex mutex;
 
     void write_to_disk(const Key &key, const Value &value);
     void read_from_disk(const std::string &path_to_file);
