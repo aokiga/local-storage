@@ -226,8 +226,7 @@ int main(int argc, const char** argv)
         std::stringstream response;
         serialize_header(GET_RESPONSE, get_response.ByteSizeLong(), response);
         get_response.SerializeToOstream(&response);
-        std::string s;
-        return s;
+        return response.str();
     };
 
     auto handle_put = [&] (int fd, const std::string& request) {
