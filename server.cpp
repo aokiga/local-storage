@@ -221,12 +221,13 @@ int main(int argc, const char** argv)
         if (it != nullptr) {
             get_response.set_offset(*it);
         }
+        //std::cerr << *it << '\n';
 
         std::stringstream response;
         serialize_header(GET_RESPONSE, get_response.ByteSizeLong(), response);
         get_response.SerializeToOstream(&response);
-
-        return response.str();
+        std::string s;
+        return s;
     };
 
     auto handle_put = [&] (int fd, const std::string& request) {
@@ -248,11 +249,12 @@ int main(int argc, const char** argv)
         serialize_header(PUT_RESPONSE, put_response.ByteSizeLong(), response);
         put_response.SerializeToOstream(&response);
 
-
         std::lock_guard<std::mutex> guard(put_mutex);
         states_put[fd].push(response.str());
 
-        return response.str();
+        std::string s;
+        return s;
+        //return response.str();
     };
 
     Handler handler = [&] (int fd, char request_type, const std::string& request) {
@@ -284,19 +286,21 @@ int main(int argc, const char** argv)
     };
 
     auto sync = [&]() {
-        storage.sync();
-        for (auto &item: states_put) {
-            auto &q = item.second;
-            auto state = states.at(item.first);
-            std::lock_guard<std::mutex> guard_output(state_output_mutex);
-            std::lock_guard<std::mutex> guard_put(put_mutex);
-            while (!q.empty()) {
-                state->output_queue.push_back(q.front());
-                q.pop();
+        while (true) {
+            storage.sync();
+            for (auto &item: states_put) {
+                auto &q = states_put[item.first];
+                auto state = states.at(item.first);
+                std::lock_guard<std::mutex> guard_output(state_output_mutex);
+                std::lock_guard<std::mutex> guard_put(put_mutex);
+                while (!q.empty()) {
+                    state->output_queue.push_back(q.front());
+                    q.pop();
+                }
+                process_output(*state);
             }
-            process_output(*state);
+            sleep(1);
         }
-        sleep(1);
     };
 
     std::thread put_requests_thread(sync);
@@ -330,6 +334,7 @@ int main(int argc, const char** argv)
                     }
 
                     states[state->fd] = state;
+                    states_put[state->fd] = std::queue<std::string>();
                 }
 
                 continue;
@@ -351,11 +356,13 @@ int main(int argc, const char** argv)
                 if (!process_output(*state)) {
                     finalize(fd);
                 }
-            }
+            };;
         }
     }
 
     LOG_INFO("exiting");
+
+    put_requests_thread.join();
 
     close(socketfd);
 

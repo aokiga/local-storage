@@ -1,5 +1,6 @@
 #include <unistd.h>
 #include <fstream>
+#include <iostream>
 #include "persistent_storage.h"
 
 PersistentStorage::PersistentStorage(const std::string &filename) {
